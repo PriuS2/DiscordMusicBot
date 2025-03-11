@@ -169,3 +169,11 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+
+
+
+# ffmpeg
+ffmpeg.exe
+ffplay.exe
+ffprobe.exe
