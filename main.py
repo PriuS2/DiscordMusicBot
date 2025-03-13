@@ -40,20 +40,76 @@ music_queue = []
 queue_info = []
 current_player = None
 
+recommend_count = 0  # 연속 추천곡 카운터
+
 
 async def play_next(voice_client):
-    global current_player
+    global current_player, recommend_count
     await asyncio.sleep(1)  # 안정성을 위해 추가
 
     if music_queue:
         next_source = music_queue.pop(0)
         queue_info.pop(0)
         current_player = next_source
-        voice_client.play(next_source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(voice_client), bot.loop))
+
+        # 🔹 추천곡인지 확인 (추천곡의 신청자는 "추천곡"으로 저장됨)
+        if queue_info and queue_info[0][1] == "추천곡":
+            recommend_count += 1
+        else:
+            recommend_count = 0  # 사용자가 추가한 곡이 재생되면 초기화
+
+        # 🔹 추천곡이 10곡 연속 재생되었으면 자동 퇴장
+        if recommend_count >= 10:
+            await voice_client.disconnect()
+            current_player = None
+            music_queue.clear()
+            queue_info.clear()
+            recommend_count = 0
+            return  # 함수 종료
+
+        voice_client.play(next_source, after=lambda e: bot.loop.create_task(play_next(voice_client)))
     else:
+        # 🔹 대기열이 비었을 경우 현재곡 기준으로 추천곡 추가
+        if current_player:
+            related_url = await get_related_video_url(current_player.url)
+            if related_url:
+                await add_to_queue(voice_client, related_url, auto_added=True)
+                return  # 새로운 곡이 추가되었으므로 종료
+
         current_player = None
         await disconnect_if_idle(voice_client)
 
+
+async def get_related_video_url(video_url):
+    """
+    현재곡의 추천 영상 URL을 가져오는 함수
+    """
+    loop = asyncio.get_event_loop()
+    data = await loop.run_in_executor(None, lambda: ytdl.extract_info(video_url, download=False))
+
+    if 'related_videos' in data:
+        for related in data['related_videos']:
+            if 'id' in related:
+                return f"https://www.youtube.com/watch?v={related['id']}"
+
+    return None
+
+
+async def add_to_queue(voice_client, url, auto_added=False):
+    """
+    추천곡을 대기열에 추가하는 함수
+    """
+    player = await YTDLSource.from_url(url, loop=bot.loop, stream=True)
+    music_queue.append(player)
+    queue_info.append((player.title, "추천곡" if auto_added else "사용자", player.url))
+
+    if auto_added:
+        channel = voice_client.channel
+        if channel:
+            await channel.send(f'🔄 추천곡 추가: [{player.title}](<{player.url}>)')
+
+    if not voice_client.is_playing():
+        await play_next(voice_client)
 
 async def disconnect_if_idle(voice_client):
     # print("disconnect_if_idle")
@@ -83,8 +139,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=False):
         loop = loop or asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
-
+        #data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
+        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
         if 'entries' in data:
             data = data['entries'][0]
 
@@ -185,12 +241,12 @@ async def stop(interaction: discord.Interaction):
 async def help_command(interaction: discord.Interaction):
     help_text = (
         "**🎵 음악 봇 명령어 안내 🎵**\n\n"
-        "`/재생 <유튜브 URL>` - YouTube 음악을 재생합니다.\n"
-        "`/대기열` - 현재 대기열을 확인합니다.\n"
-        "`/스킵` - 현재 재생 중인 음악을 스킵합니다.\n"
-        "`/멈춰` - 음악을 멈추고 봇을 퇴장시킵니다.\n"
-        "`/현재곡` - 현재 재생 중인 곡의 정보를 확인합니다.\n"
-        "`/도움말` - 사용 가능한 모든 명령어를 안내합니다.\n"
+        "/재생 <유튜브 URL> - YouTube 음악을 재생합니다.\n"
+        "/대기열 - 현재 대기열을 확인합니다.\n"
+        "/스킵 - 현재 재생 중인 음악을 스킵합니다.\n"
+        "/멈춰 - 음악을 멈추고 봇을 퇴장시킵니다.\n"
+        "/현재곡 - 현재 재생 중인 곡의 정보를 확인합니다.\n"
+        "/도움말 - 사용 가능한 모든 명령어를 안내합니다.\n"
     )
     await interaction.response.send_message(help_text)
 
