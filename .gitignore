@@ -177,3 +177,6 @@ cython_debug/
 ffmpeg.exe
 ffplay.exe
 ffprobe.exe
+
+# intelij
+.idea/
