@@ -7,6 +7,8 @@ from discord import app_commands
 from discord.ext import commands
 import yt_dlp
 
+import YTRelated
+
 load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
@@ -41,45 +43,16 @@ ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 music_queue = []
 queue_info = []
 current_player = None
-auto_added_count = 0  # 자동 추가된 곡 수를 추적하는 변수
-max_auto_add = 10  # 최대 자동 추가 곡 수
+# auto_added_count = 0  # 자동 추가된 곡 수를 추적하는 변수
+# max_auto_add = 10  # 최대 자동 추가 곡 수
 
-# 연관곡을 가져오는 새로운 함수 추가
-async def get_related_video(video_id):
-    try:
-        # 현재 곡의 ID로 연관 비디오 검색
-        search_url = f"https://www.youtube.com/watch?v={video_id}"
-        loop = asyncio.get_event_loop()
-
-        # 연관 비디오 정보 추출 설정
-        related_options = ytdl_format_options.copy()
-        related_options.update({
-            'skip_download': True,
-            'extract_flat': True,
-            'noplaylist': False,  # 관련 동영상 가져오기 위해 필요
-        })
-
-        with yt_dlp.YoutubeDL(related_options) as ydl:
-            info = await loop.run_in_executor(None, lambda: ydl.extract_info(search_url, download=False))
-
-            # 추천 비디오 목록 가져오기
-            if 'entries' in info.get('related_videos', {}):
-                related = info.get('related_videos', [])
-
-                # 첫 번째 연관 비디오 URL 생성
-                if related and len(related) > 0:
-                    for video in related:
-                        if video.get('id'):
-                            return f"https://www.youtube.com/watch?v={video['id']}"
-    except Exception as e:
-        print(f"Error getting related video: {str(e)}")
-
-    return None
 
 # play_next 함수 수정
 async def play_next(voice_client):
     global current_player, auto_added_count
     await asyncio.sleep(1)  # 안정성을 위해 추가
+
+    await check_user_num_and_disconnect(voice_client)
 
     try:
         if music_queue:
@@ -89,66 +62,50 @@ async def play_next(voice_client):
             voice_client.play(next_source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(voice_client), bot.loop))
         else:
             # 대기열이 비었고 자동 추가 횟수가 최대치 미만일 때
-            if current_player and auto_added_count < max_auto_add:
-                # 현재 재생 중이던 곡의 ID 추출
-                video_id = None
-                if current_player and current_player.url:
-                    # URL에서 동영상 ID 추출
-                    import re
-                    match = re.search(r'(?:youtube\.com\/watch\?v=|youtu.be\/)([a-zA-Z0-9_-]+)', current_player.url)
-                    if match:
-                        video_id = match.group(1)
-
-                if video_id:
-                    related_url = await get_related_video(video_id)
-                    if related_url:
-                        try:
-                            # 연관곡 추가
-                            player = await YTDLSource.from_url(related_url, loop=bot.loop, stream=True)
-                            music_queue.append(player)
-                            queue_info.append((player.title, "자동 추천", player.url))
-                            auto_added_count += 1
-
-                            # 추가 후 바로 재생
-                            await play_next(voice_client)
-
-                            # 서버의 모든 채널에서 알림 전송 (텍스트 채널 찾기)
-                            if voice_client and voice_client.guild:
-                                for channel in voice_client.guild.text_channels:
-                                    try:
-                                        await channel.send(f'🎵 자동 추천 곡 추가: [{player.title}](<{player.url}>) (남은 자동 추천: {max_auto_add - auto_added_count})')
-                                        break  # 메시지를 보냈으면 루프 종료
-                                    except:
-                                        continue
-
-                            return
-                        except Exception as e:
-                            print(f"Error adding related song: {str(e)}")
+            # if current_player and auto_added_count < max_auto_add:
+            if current_player:
+                currentUrl = current_player.url
+                related_url = YTRelated.get_related_video(currentUrl)
+                
+                if related_url is None or len(related_url) == 0:
+                    pass
+                else:
+                    # 연관곡 추가
+                    player = await YTDLSource.from_url(related_url, loop=bot.loop, stream=True)
+                    music_queue.append(player)
+                    queue_info.append((player.title, "자동 추천", player.url))
+                    auto_added_count += 1
+    
+                    # 추가 후 바로 재생
+                    await play_next(voice_client)
 
             # 자동 추가 실패 또는 최대치 도달
             current_player = None
-            auto_added_count = 0  # 초기화
-            await disconnect_if_idle(voice_client)
+            # auto_added_count = 0  # 초기화
+            # await disconnect_if_idle(voice_client)
     except Exception as e:
         print(f"Error in play_next: {str(e)}")
-        await disconnect_if_idle(voice_client)
+        # await disconnect_if_idle(voice_client)
 
 
-async def disconnect_if_idle(voice_client):
-    await asyncio.sleep(5)  # 5초 대기 후 확인
-
-    try:
-        doDisconnect = False
-        if voice_client and voice_client.channel:
-            if len(voice_client.channel.members) == 1:
-                doDisconnect = True
-            if not music_queue or len(music_queue) == 0:
-                doDisconnect = True
-
-            if doDisconnect:
-                await voice_client.disconnect()
-    except Exception as e:
-        print(f"Error in disconnect_if_idle: {str(e)}")
+# async def disconnect_if_idle(voice_client):
+#     await asyncio.sleep(5)  # 5초 대기 후 확인
+# 
+#     try:
+#         doDisconnect = False
+#         if voice_client and voice_client.channel:
+#             if len(voice_client.channel.members) == 1:
+#                 doDisconnect = True
+#             # if not music_queue or len(music_queue) == 0:
+#             #     doDisconnect = True
+#             
+#             if not voice_client.is_playing():
+#                 doDisconnect = True
+# 
+#             if doDisconnect:
+#                 await voice_client.disconnect()
+#     except Exception as e:
+#         print(f"Error in disconnect_if_idle: {str(e)}")
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
@@ -208,13 +165,20 @@ class YTDLSource(discord.PCMVolumeTransformer):
 async def on_voice_state_update(member, before, after):
     try:
         voice_client = discord.utils.get(bot.voice_clients, guild=member.guild)
-
         if voice_client and voice_client.channel:
             await asyncio.sleep(5)  # 5초 대기 후 확인
-            if len(voice_client.channel.members) == 1:
-                await voice_client.disconnect()
+            await check_user_num_and_disconnect(voice_client)
+
     except Exception as e:
         print(f"Error in voice_state_update: {str(e)}")
+        
+async def check_user_num_and_disconnect(voice_client):
+    try:
+        if len(voice_client.channel.members) == 1:
+            await voice_client.disconnect()
+    except Exception as e:
+        print(f"Error in check_user_num_and_disconnect: {str(e)}")       
+    
 
 
 # 재생 명령어에서 유저가 곡을 추가할 때 자동 추가 카운트 초기화 추가
