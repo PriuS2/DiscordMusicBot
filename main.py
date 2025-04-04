@@ -6,9 +6,11 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import yt_dlp
+from YTRelated import get_related_video
 
 load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
+AUTO_PLAY = True  # 자동 재생 기능 활성화 여부
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -53,9 +55,23 @@ async def play_next(voice_client):
             queue_info.pop(0)
             current_player = next_source
             voice_client.play(next_source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(voice_client), bot.loop))
-        else:
-            current_player = None
-            await disconnect_if_idle(voice_client)
+        elif AUTO_PLAY and current_player:
+            # 현재 재생 중인 곡의 URL에서 연관 영상 URL 가져오기
+            try:
+                related_url = get_related_video(current_player.url)
+                if related_url and "youtube.com/watch" in related_url:
+                    # 연관 영상을 재생 대기열에 추가
+                    player = await YTDLSource.from_url(related_url, loop=bot.loop, stream=True)
+                    music_queue.append(player)
+                    queue_info.append((player.title, "자동 재생", player.url))
+                    current_player = player
+                    voice_client.play(player, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(voice_client), bot.loop))
+                    return
+            except Exception as e:
+                print(f"Error in auto-play: {str(e)}")
+        
+        current_player = None
+        await disconnect_if_idle(voice_client)
     except Exception as e:
         print(f"Error in play_next: {str(e)}")
         await disconnect_if_idle(voice_client)
@@ -200,6 +216,13 @@ async def stop(interaction: discord.Interaction):
         await interaction.response.send_message("봇이 음성 채널에 있지 않습니다.")
 
 
+@bot.tree.command(name="자동재생", description="자동 재생 기능을 켜거나 끕니다.")
+async def autoplay(interaction: discord.Interaction):
+    global AUTO_PLAY
+    AUTO_PLAY = not AUTO_PLAY
+    status = "켜짐" if AUTO_PLAY else "꺼짐"
+    await interaction.response.send_message(f"자동 재생 기능이 {status}으로 설정되었습니다.")
+
 @bot.tree.command(name="도움말", description="봇의 모든 명령어를 안내합니다.")
 async def help_command(interaction: discord.Interaction):
     help_text = (
@@ -209,6 +232,7 @@ async def help_command(interaction: discord.Interaction):
         "`/스킵` - 현재 재생 중인 음악을 스킵합니다.\n"
         "`/멈춰` - 음악을 멈추고 봇을 퇴장시킵니다.\n"
         "`/현재곡` - 현재 재생 중인 곡의 정보를 확인합니다.\n"
+        "`/자동재생` - 자동 재생 기능을 켜거나 끕니다.\n"
         "`/도움말` - 사용 가능한 모든 명령어를 안내합니다.\n"
     )
     await interaction.response.send_message(help_text)
